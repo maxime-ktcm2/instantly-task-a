@@ -1,0 +1,1470 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-ingest-v2",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*",
+          "ignoreBots": true
+        }
+      },
+      "id": "8c2a171c-0725-4c5c-a7b8-c3a8d7706311",
+      "name": "Webhook Lead Ingest",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        1344,
+        816
+      ],
+      "webhookId": "98f0359b-9406-4862-99c0-6b70d3a2842d",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const roleLocals = new Set(['info','sales','contact','support','hello','hi','admin','noreply','no-reply','careers','jobs','legal','privacy','abuse','postmaster','webmaster','marketing']);\nfunction djb2(str) {\n  let h = 5381;\n  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;\n  return (h >>> 0).toString(16).padStart(8, '0');\n}\nreturn $input.all().map(item => {\n  const body = item.json.body || item.json;\n  const email = String(body.email || '').trim().toLowerCase();\n  const companyDomain = String(body.company_domain || body.domain || '').trim().toLowerCase().replace(/^https?:\\/\\//, '').replace(/^www\\./, '').replace(/\\/$/, '');\n  const validEmail = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email);\n  const validDomain = /^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(companyDomain);\n  const emailLocal = validEmail ? email.split('@')[0] : '';\n  const emailDomain = validEmail ? email.split('@')[1] : '';\n  const eventHash = djb2(`${email}|${companyDomain}|${Date.now()}`);\n  return { json: {\n    received_at: new Date().toISOString(),\n    raw_payload: body,\n    email,\n    company_domain: companyDomain,\n    email_local: emailLocal,\n    email_domain: emailDomain,\n    valid_email: validEmail,\n    valid_domain: validDomain,\n    role_account: roleLocals.has(emailLocal),\n    event_hash: eventHash\n  }};\n});"
+      },
+      "id": "29bde2d4-4b15-464b-a957-500903a99f21",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        816
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "invalid-email",
+              "leftValue": "={{ $json.valid_email }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "invalid-domain",
+              "leftValue": "={{ $json.valid_domain }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "9fd0c96b-17e0-480a-8c20-1c535691b098",
+      "name": "Invalid Email Or Domain?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1776,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const j = item.json;\n  const reason = !j.valid_email ? 'invalid_email' : 'invalid_domain';\n  const actionTaken = reason === 'invalid_email' ? 'skipped_invalid_email' : 'skipped_invalid_domain';\n  return { json: {\n    email: j.email,\n    company_domain: j.company_domain,\n    role_account: !!j.role_account,\n    enrichment_inconsistent: false,\n    website_unresolved: false,\n    apollo_organization: {},\n    apollo_top_people: [],\n    email_matched_in_top_people: false,\n    matched_person: null,\n    apify_content: [],\n    combined_enrichment: { raw_payload: j.raw_payload },\n    data_tier: 'MINIMAL',\n    agent_iterations: 0,\n    agent_tools_called: [],\n    agent_has_enough_info: false,\n    agent_findings: {},\n    agent_research_reasoning: 'Skipped at validation: ' + reason,\n    criteria_scores: [],\n    disqualifiers_triggered: [reason],\n    subtotal: 0,\n    expected_score: 1,\n    final_score: 1,\n    tier: 'cold',\n    summary_reasoning: `Validation failed: ${reason}. Lead is not actionable; no enrichment or scoring performed.`,\n    evidence_fabricated: {},\n    evidence_fabrication: false,\n    score_anomaly: false,\n    email_subject: null,\n    email_body: null,\n    email_template_used: 'cold_skip',\n    action_taken: actionTaken,\n    review_reason: null,\n    total_cost_usd: null,\n    total_latency_ms: Date.now() - new Date(j.received_at).getTime(),\n    llm_calls_count: 0,\n    event_hash: j.event_hash,\n    reviewer_summary: `Validation skip: ${reason}`\n  }};\n});"
+      },
+      "id": "5354a5ef-36b5-4443-bdd5-7bc5c9015cc2",
+      "name": "Build Skip Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.apollo.io/api/v1/organizations/enrich",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "domain",
+              "value": "={{ $json.company_domain }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "f2b2d29d-7a8c-4e9f-bd3c-6bc5b1a663de",
+      "name": "Apollo Organization Enrich",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1984,
+        704
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ch3LYJVWTmIg9fO3",
+          "name": "instantly_takehome_apollo"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/api/v1/mixed_people/api_search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q_organization_domains_list[]",
+              "value": "={{ $('Normalize Lead').first().json.company_domain }}"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "owner"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "founder"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "c_suite"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "vp"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "head"
+            },
+            {
+              "name": "person_seniorities[]",
+              "value": "director"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            },
+            {
+              "name": "per_page",
+              "value": "5"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "edf2f2d3-2c78-463d-b77e-0f6f02adec14",
+      "name": "Apollo People Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2160,
+        704
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ch3LYJVWTmIg9fO3",
+          "name": "instantly_takehome_apollo"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "Run actor and get dataset",
+        "actorSource": "store",
+        "actorId": {
+          "__rl": true,
+          "value": "aYG0l9s7dbB7j3gbS",
+          "mode": "list",
+          "cachedResultName": "Website Content Crawler (apify/website-content-crawler)"
+        },
+        "customBody": "={\n  \"startUrls\": [{ \"url\": \"https://{{ $('Normalize Lead').first().json.company_domain }}\" }],\n  \"crawlerType\": \"cheerio\",\n  \"maxCrawlPages\": 7,\n  \"maxCrawlDepth\": 1,\n  \"maxScrollHeightPixels\": 0,\n  \"requestTimeoutSecs\": 30,\n  \"maxRequestRetries\": 0,\n  \"dynamicContentWaitSecs\": 2,\n  \"saveMarkdown\": true,\n  \"saveHtml\": false,\n  \"blockMedia\": true,\n  \"removeCookieWarnings\": true,\n  \"include\": [\n    { \"glob\": \"**/contact*\" },\n    { \"glob\": \"**/agence*\" },\n    { \"glob\": \"**/entreprise*\" },\n    { \"glob\": \"**/about*\" },\n    { \"glob\": \"**/a-propos*\" },\n    { \"glob\": \"**/qui-sommes-nous*\" },\n    { \"glob\": \"**/services*\" },\n    { \"glob\": \"**/products*\" },\n    { \"glob\": \"**/careers*\" },\n    { \"glob\": \"**/carrieres*\" },\n    { \"glob\": \"**/recrutement*\" },\n    { \"glob\": \"**/emploi*\" },\n    { \"glob\": \"**/jobs*\" }\n  ]\n}",
+        "timeout": 120
+      },
+      "id": "88f0f25b-92a2-4e29-9aba-15e769b9f106",
+      "name": "Apify Website Crawl",
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        880
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "apifyApi": {
+          "id": "utLa7Ic0Nuka9x6Z",
+          "name": "instantly_takehome_apify"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const pages = $input.all().map(item => {\n  const j = item.json || {};\n  const markdown = j.markdown || j.text || j.content || '';\n  return {\n    url: j.url || j.loadedUrl || null,\n    title: j.metadata?.title || j.pageTitle || j.title || null,\n    markdown: String(markdown).slice(0, 6000)\n  };\n}).filter(p => p.markdown.length > 0);\nconst totalChars = pages.reduce((s, p) => s + p.markdown.length, 0);\nreturn [{ json: { apify_pages: pages, apify_page_count: pages.length, apify_total_chars: totalChars, website_unresolved: pages.length === 0 || totalChars < 200 } }];"
+      },
+      "id": "4d2d51d2-b86b-4ddf-a0ac-9a8938be5194",
+      "name": "Summarize Website Crawl",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        880
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "c2e4985c-8f71-4f2a-a37e-bba6703717ed",
+      "name": "Merge Apollo And Website",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2336,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const n = $('Normalize Lead').first().json;\n  // CRITICAL FIX: read Apollo Org + People directly from upstream nodes\n  // (the Merge node loses Apollo Org data when Apollo People errors).\n  const orgRaw = (()=>{ try { return $('Apollo Organization Enrich').first().json || {}; } catch(e) { return {}; } })();\n  const peopleRaw = (()=>{ try { return $('Apollo People Search').first().json || {}; } catch(e) { return {}; } })();\n  const apifySum = (()=>{ try { return $('Summarize Website Crawl').first().json || {}; } catch(e) { return {}; } })();\n  const org = orgRaw.organization || orgRaw.apollo_organization || {};\n  const topPeople = Array.isArray(peopleRaw.people) ? peopleRaw.people : Array.isArray(peopleRaw.contacts) ? peopleRaw.contacts : Array.isArray(peopleRaw.organization_top_people) ? peopleRaw.organization_top_people : [];\n  const apolloPeopleError = peopleRaw.error_code || peopleRaw.error || null;\n  const email = n.email;\n  const matchedPerson = topPeople.find(p => String(p.email || p.work_email || '').toLowerCase() === email) || null;\n  const emailMatched = !!matchedPerson;\n  const techStack = Array.isArray(org.technologies) ? org.technologies.map(t => typeof t === 'string' ? t : t?.name).filter(Boolean) : [];\n  const industries = Array.isArray(org.industries) ? org.industries : [];\n  const keywords = Array.isArray(org.keywords) ? org.keywords : [];\n  const pages = apifySum.apify_pages || [];\n  const pageText = pages.map(p => `${p.title || ''}\\n${p.markdown || ''}`).join('\\n\\n').slice(0, 16000);\n  const websiteUnresolved = !!apifySum.website_unresolved;\n  const enrichmentInconsistent = n.email_domain && n.company_domain && n.email_domain !== n.company_domain && !['gmail.com','outlook.com','hotmail.com','yahoo.com','icloud.com','proton.me','protonmail.com'].includes(n.email_domain);\n  const thinTriggers = [];\n  if (!org.short_description || String(org.short_description).length < 100) thinTriggers.push('missing_or_short_description');\n  if (!org.estimated_num_employees) thinTriggers.push('missing_company_size');\n  if (!org.industry && industries.length === 0) thinTriggers.push('missing_industry');\n  if (!emailMatched || !matchedPerson?.title) thinTriggers.push('missing_confirmed_decision_maker');\n  if ((apifySum.apify_total_chars || 0) < 500) thinTriggers.push('thin_website');\n  if (websiteUnresolved) thinTriggers.push('website_unresolved');\n  const apolloHasOrgData = !!(org.name || org.industry || org.estimated_num_employees);\n  const dataTier = (apolloHasOrgData && org.industry && org.estimated_num_employees && emailMatched && !websiteUnresolved && (apifySum.apify_total_chars || 0) >= 500) ? 'RICH' : (apolloHasOrgData || (apifySum.apify_total_chars || 0) >= 500 ? 'PARTIAL' : 'MINIMAL');\n  const combined = {\n    email: n.email,\n    company_domain: n.company_domain,\n    company_name: org.name || null,\n    industry: org.industry || (industries[0] || null),\n    industries_list: industries,\n    apollo_keywords: keywords,\n    estimated_num_employees: org.estimated_num_employees || null,\n    country: org.country || null,\n    city: org.city || null,\n    short_description: org.short_description || null,\n    tech_stack: techStack,\n    latest_funding_stage: org.latest_funding_stage || null,\n    latest_funding_round_date: org.latest_funding_round_date || null,\n    total_funding_printed: org.total_funding_printed || null,\n    founded_year: org.founded_year || null,\n    person_first_name: matchedPerson?.first_name || null,\n    person_last_name: matchedPerson?.last_name || null,\n    person_title: matchedPerson?.title || null,\n    person_seniority: matchedPerson?.seniority || null,\n    email_matched_in_top_people: emailMatched,\n    apollo_people_unavailable: !!apolloPeopleError,\n    website_pages_count: pages.length,\n    website_total_chars: apifySum.apify_total_chars || 0,\n    website_excerpt: pageText.slice(0, 6000),\n    thin_data_triggers: thinTriggers\n  };\n  const context = JSON.stringify(combined, null, 2);\n  return { json: {\n    ...n,\n    apollo_organization: org,\n    apollo_top_people: topPeople,\n    apollo_people_unavailable: !!apolloPeopleError,\n    email_matched_in_top_people: emailMatched,\n    matched_person: matchedPerson,\n    apify_content: pages,\n    website_unresolved: websiteUnresolved,\n    enrichment_inconsistent: enrichmentInconsistent,\n    combined_enrichment: combined,\n    combined_enrichment_text: context,\n    thin_data_triggers: thinTriggers,\n    data_tier: dataTier\n  }};\n});"
+      },
+      "id": "ef895e3e-f5b2-4278-b149-2c9b8a42b3fe",
+      "name": "Build Enrichment Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        832
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Lead enrichment payload:\n<enrichment>\n{{ $json.combined_enrichment_text }}\n</enrichment>\n\nThin-data triggers detected upstream: {{ JSON.stringify($json.thin_data_triggers) }}\n\nDecide whether the data is enough to score this lead against the ICP. If not, call the smallest number of tools needed. Return the structured JSON only.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "<role>\nYou are the research agent for Instantly.ai inbound lead enrichment. The pipeline has already pulled Apollo firmographics + top people, plus an Apify website crawl. Your job is decision and gap-filling, not scoring.\n</role>\n\n<task>\nDecide if the available data is sufficient to make a safe ICP scoring decision. If sparse, call tools autonomously to fill the smallest set of critical gaps. Return one structured JSON object, no prose outside JSON.\n</task>\n\n<icp_dimensions>\nFor Instantly.ai, a cold-email and outbound automation platform, what matters: industry fit, company size, decision-maker seniority, geography, sales hiring intent, recent growth/funding, outbound or sales-stack intent. A decisive negative signal, such as a direct competitor, B2C-only business, sold domain, or invalid company, is also enough context to score and disqualify safely.\n</icp_dimensions>\n\n<tools>\nweb_search: Google search via Apify. Pass one exact query. Use operators when useful: site:linkedin.com/company Acme, Acme funding, Acme SDR jobs, Acme Apollo Outreach Salesloft. Returns search results with titles, URLs, and snippets.\njina_reader_alt: Fetch one URL as clean markdown. Use it after search returns a concrete non-LinkedIn URL worth reading, or directly on the submitted company domain when Apify website crawl is empty/thin.\n\nWhen to call:\n- Website crawl is empty or below 500 chars and company domain exists -> first call jina_reader_alt on https://{domain}.\n- If jina_reader_alt returns a clear business description or decisive negative signal, stop and return has_enough_info=true. Do not search just to fill nice-to-have gaps.\n- Apollo industry missing and website/Jina has no clear description -> web_search for company name/domain plus industry context.\n- No decision-maker matched and no seniority signal -> web_search site:linkedin.com/company {company or domain}.\n- No funding/growth signal -> web_search {company} funding OR {company} Series, then use jina_reader_alt on a specific article only if the snippet looks relevant.\n- Outbound stack unknown -> web_search {company} Apollo Outreach Salesloft Lemlist Smartlead.\n\nWhen not to call:\n- Apollo already returned industry, size, role, and at least one intent signal -> return has_enough_info=true with zero tool calls.\n- The same query was already attempted -> do not retry it.\n- You found a decisive negative signal, for example direct competitor, B2C-only, closed/sold domain -> return has_enough_info=true so scoring can disqualify.\n</tools>\n\n<constraints>\n- Hard cap: 3 tool calls total across both tools.\n- If jina_reader_alt returns an empty or error response (domain not resolvable, 400, etc.), do NOT retry the same URL. Record the failure in result_summary, then either try web_search for the company or conclude with has_enough_info=true if a decisive negative signal is established.\n- Jina Reader does not read LinkedIn reliably. LinkedIn evidence stays as search snippets or Apollo.\n- Never invent findings. If a tool returns nothing useful, say so in result_summary.\n- Do not infer employee count from pricing, free trial, domain extension, or visual polish. If employee count is not explicitly sourced, set size_estimate=null or label it as low-confidence in the reasoning, not as evidence.\n- When you have remaining tool budget (used < 3) AND intent_hiring_sales is still null after Apollo+Apify, spend ONE web_search on `{company} careers SDR AE BDR` or `site:linkedin.com/jobs {company} sales` to find sales hiring evidence. Add findings to intent_signals with the source URL. This unlocks intent_hiring_sales=2 downstream.\n- When apollo_people_unavailable=true (Apollo plan gating) AND the email's local-part looks like a real name, spend ONE web_search to verify the person's role: `site:linkedin.com/in/{local_part} {company}` or `{local_part} {company} CEO founder VP`. If you find sourced evidence the person is Founder/CEO/VP/Head/Director, set additional_findings.decision_maker_role with the verbatim title + source_url. This unlocks higher seniority_fit downstream.\n</constraints>\n\n<output_format>\nReturn JSON only:\n{\n  \"has_enough_info\": boolean,\n  \"gaps_remaining\": string[],\n  \"tools_called\": [{ \"tool\": string, \"input\": string, \"result_summary\": string }],\n  \"additional_findings\": {\n    \"industry\": string|null,\n    \"size_estimate\": string|null,\n    \"decision_maker_role\": string|null,\n    \"geography\": string|null,\n    \"intent_signals\": string[],\n    \"tech_stack_signals\": string[],\n    \"source_urls\": string[]\n  },\n  \"research_reasoning\": string,\n  \"iterations_used\": number\n}\n</output_format>\n\n<rules>\n- has_enough_info=true when there is enough positive evidence to score normally: industry plus geography plus either size, role, or a current intent/stack signal.\n- has_enough_info=true when there is a decisive negative signal that makes scoring/disqualification safe, even if size, funding, or decision-maker are missing.\n- has_enough_info=false when there is no clear business description, no reliable geography, and no decisive positive or negative signal after tool use.\n- Gaps may remain when has_enough_info=true. List them in gaps_remaining for reviewer visibility.\n- Reasoning is reviewer-readable, one short paragraph max. No hidden chain-of-thought.\n</rules>",
+          "maxIterations": 3
+        }
+      },
+      "id": "a898f4d5-9ada-45e6-8507-509fb804c1e6",
+      "name": "Agent Research Gap Filler",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2608,
+        832
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"required\": [\"has_enough_info\", \"gaps_remaining\", \"tools_called\", \"additional_findings\", \"research_reasoning\", \"iterations_used\"],\n  \"properties\": {\n    \"has_enough_info\": { \"type\": \"boolean\" },\n    \"gaps_remaining\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"tools_called\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"tool\": { \"type\": \"string\" },\n          \"input\": { \"type\": \"string\" },\n          \"result_summary\": { \"type\": \"string\" }\n        },\n        \"required\": [\"tool\", \"input\", \"result_summary\"]\n      }\n    },\n    \"additional_findings\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"industry\": { \"type\": [\"string\", \"null\"] },\n        \"size_estimate\": { \"type\": [\"string\", \"null\"] },\n        \"decision_maker_role\": { \"type\": [\"string\", \"null\"] },\n        \"geography\": { \"type\": [\"string\", \"null\"] },\n        \"intent_signals\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n        \"tech_stack_signals\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n        \"source_urls\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } }\n      }\n    },\n    \"research_reasoning\": { \"type\": \"string\" },\n    \"iterations_used\": { \"type\": \"number\" }\n  }\n}"
+      },
+      "id": "82ada12a-b324-41a3-9ca6-17095c27c679",
+      "name": "Agent Structured Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2880,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "has-enough",
+              "leftValue": "={{ $json.output.has_enough_info }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7b663356-b4d0-4673-a89c-7d8e0d0d9b25",
+      "name": "Agent Has Enough Info?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3008,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Build Enrichment Context').first().json;\nreturn $input.all().map(item => {\n  const rawAgent = item.json || {};\n  const agent = rawAgent.output || rawAgent;\n  const reasoning = agent.research_reasoning || 'Agent could not resolve critical gaps.';\n  return { json: {\n    email: base.email,\n    company_domain: base.company_domain,\n    role_account: !!base.role_account,\n    enrichment_inconsistent: !!base.enrichment_inconsistent,\n    website_unresolved: !!base.website_unresolved,\n    apollo_organization: base.apollo_organization || {},\n    apollo_top_people: base.apollo_top_people || [],\n    email_matched_in_top_people: !!base.email_matched_in_top_people,\n    matched_person: base.matched_person || null,\n    apify_content: base.apify_content || [],\n    combined_enrichment: base.combined_enrichment || {},\n    data_tier: base.data_tier || 'MINIMAL',\n    agent_iterations: agent.iterations_used || 0,\n    agent_tools_called: agent.tools_called || [],\n    agent_has_enough_info: !!agent.has_enough_info,\n    agent_findings: agent.additional_findings || {},\n    agent_research_reasoning: reasoning,\n    criteria_scores: [],\n    disqualifiers_triggered: ['agent_unresolved'],\n    subtotal: 0,\n    expected_score: 1,\n    final_score: 1,\n    tier: 'cold',\n    summary_reasoning: `Routed to review (cold tier): ${reasoning}`,\n    evidence_fabricated: {},\n    evidence_fabrication: false,\n    score_anomaly: false,\n    email_subject: null,\n    email_body: null,\n    email_template_used: 'cold_review',\n    action_taken: 'routed_to_review',\n    review_reason: 'agent_unresolved',\n    total_cost_usd: null,\n    total_latency_ms: Date.now() - new Date(base.received_at).getTime(),\n    llm_calls_count: 1 + (agent.iterations_used || 0),\n    event_hash: base.event_hash,\n    reviewer_summary: `COLD (manual review): ${reasoning}`\n  }};\n});"
+      },
+      "id": "7f2e14ca-6bee-45f7-adda-abfc53ecaf91",
+      "name": "Build Review Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3184,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Lead compact context:\n<enrichment>\n{{ String($('Build Enrichment Context').first().json.combined_enrichment_text || '').slice(0, 2500) }}\n</enrichment>\n\nAgent research compact:\n<agent_research>\n{{ JSON.stringify(($json.output || $json), null, 2).slice(0, 3000) }}\n</agent_research>\n\nBackend flags:\nrole_account={{ $('Build Enrichment Context').first().json.role_account }}\nenrichment_inconsistent={{ $('Build Enrichment Context').first().json.enrichment_inconsistent }}\nwebsite_unresolved={{ $('Build Enrichment Context').first().json.website_unresolved }}\nemail_matched_in_top_people={{ $('Build Enrichment Context').first().json.email_matched_in_top_people }}\ndata_tier={{ $('Build Enrichment Context').first().json.data_tier }}\n\nScore this lead against the Instantly ICP. Return JSON only.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "<role>\nYou score inbound B2B leads for Instantly.ai, a cold-email and outbound automation platform.\n</role>\n\n<task>\nProduce a decomposed ICP score over 7 criteria, anchor a holistic final 1-10, classify as hot/warm/cold. Return JSON only.\n</task>\n\n<scoring_rubric>\nScore each criterion 0, 1, or 2.\n\nindustry_fit: 0=off-ICP (retail, hospitality, B2C, K-12) | 1=adjacent (ecom, consumer fintech, real estate) | 2=strong (B2B SaaS, agency, consulting, recruitment, MarTech, SalesTech, RevOps)\nsize_fit: 0=<10 or >2000 employees | 1=500-2000 or unknown | 2=10-500\nseniority_fit: 0=junior IC | 1=Manager, Lead, Sr. IC | 2=Director, VP, Head, C-level, Founder, Owner\ngeography_fit: 0=restricted (CN, RU, IR, KP) | 1=adjacent (LatAm, SEA, India, Africa) | 2=primary (US, UK, CA, AU, Western EU)\nintent_hiring_sales: 0=no signal | 1=mentions sales team | 2=active SDR/AE/BDR posting OR explicit scaling sales\nintent_growth_funding: 0=no signal | 1=older funding >18 months OR organic growth | 2=recent funding <12 months OR explicit Series A/B/C just closed\nintent_outbound_stack: 0=no signal | 1=generic CRM only (Salesforce, HubSpot, Pipedrive) | 2=Apollo, Outreach, Salesloft, Lemlist, Smartlead, Reply.io OR explicit cold outbound / AI SDR\n</scoring_rubric>\n\n<disqualifier_whitelist>\nONLY these disqualifier values are valid. Inventing custom labels like product_market_mismatch, industry_mismatch, wrong_persona is INVALID. If the lead is non-outbound SaaS (customer support, dev tools, project management), score on the 7 criteria normally; weak intent_outbound_stack drives a Warm tier with nurture, do NOT add a custom disqualifier.\n\ncompetitor_not_prospect: ONLY for direct competitors selling a software platform for cold email, sales engagement, outbound automation, or lead database/prospecting. Examples: Lemlist, Apollo (as platform), Outreach, Salesloft, Smartlead, Reply.io, La Growth Machine, Sqell. NOT competitors: dev tools (Linear, Retool, GitHub), productivity tools, customer support SaaS (Zendesk, Pylon, Intercom), fintech (Stripe, Plaid), project management. If unsure, do NOT add competitor_not_prospect.\n\noutbound_agency_service_provider: For lead-gen agencies / service providers that DO outbound-as-a-service for clients (Belkins, Cleverly, Martal). They overlap Instantly's market by service. tier=cold, final_score 2-3, distinct from pure competitor.\n\nrole_account: Backend flag auto-detected upstream when role_account=true. Force tier=cold, final <=2.\n\nenterprise_off_icp: Company size > 2000 employees AND no individual decision-maker matched. Enterprise sales motion differs from Instantly's target.\n\nb2c_only: Company sells exclusively to consumers, no B2B revenue stream.\n\ninvalid_lead: Email or domain failed validation upstream.\n\nwebsite_unresolved: Domain does not resolve AND agent recovered no useful external source.\n\ndead_domain_no_web_presence: Domain unresolvable AND Google returns zero results AND Apollo empty.\n</disqualifier_whitelist>\n\n<output_format>\n{\n  \"criteria_scores\": [{ \"name\": string, \"score\": 0|1|2, \"reasoning\": string, \"evidence_quote\": string }],\n  \"disqualifiers_triggered\": string[],\n  \"subtotal\": number,\n  \"final_score\": number,\n  \"tier\": \"hot\"|\"warm\"|\"cold\",\n  \"summary_reasoning\": string,\n  \"confidence\": number\n}\n\nSubtotal-to-final reference: 0-2 -> 1-2 | 3-4 -> 3 | 5 -> 4 | 6-7 -> 5 | 8-9 -> 6 | 10 -> 7 | 11 -> 8 | 12-13 -> 9 | 14 -> 10\nTier map: 8-10 hot, 4-7 warm, 1-3 cold.\n</output_format>\n\n<examples>\n<example name=\"hot\">\nB2B SaaS, 180 employees, US, VP Sales matched, recent Series B, stack Apollo + Outreach + Salesforce.\nScores: industry=2, size=2, seniority=2, geography=2, hiring=1, funding=2, stack=2 -> subtotal=13, final=9, tier=hot. No disqualifier.\n</example>\n\n<example name=\"warm_non_outbound_saas\">\nLinear, B2B project management SaaS, 180 employees, US, CEO confirmed, Series C 2025.\nScores: industry=2, size=2, seniority=2, geography=2, hiring=0, funding=2, stack=0 -> subtotal=10, final=7, tier=warm. NO disqualifier (NOT a competitor, just weak current intent). Soft nurture email.\n</example>\n\n<example name=\"hot_customer_support_saas\">\nPylon, B2B customer support SaaS, 120 employees, SF, CEO Marty Kausas, Series B 2025, hiring VP Sales.\nScores: industry=2, size=2, seniority=2, geography=2, hiring=2, funding=2, stack=0 -> subtotal=12, final=9, tier=hot. NO disqualifier (their product is support not sales outbound). Hot email targeting outbound enablement for their growing sales team.\n</example>\n\n<example name=\"direct_competitor\">\nLemlist, cold-email automation platform.\ndisqualifiers: [competitor_not_prospect]. industry_fit=2, final=1, tier=cold.\n</example>\n\n<example name=\"outbound_agency\">\nBelkins, B2B lead-gen agency providing outbound-as-a-service.\ndisqualifiers: [outbound_agency_service_provider]. industry_fit=2, size_fit=2, final=2, tier=cold. Manual review distinct from pure competitor.\n</example>\n\n<example name=\"enterprise_role_account\">\nStripe, info@stripe.com inbound, role_account=true, 8000 employees.\ndisqualifiers: [role_account, enterprise_off_icp]. industry_fit=2, final=1, tier=cold.\n</example>\n</examples>\n\n<rules>\n- Score criteria first, then apply disqualifiers from the whitelist only.\n- Direct competitor: industry_fit can still be 2 if SalesTech; competitor_not_prospect forces final=1, tier=cold.\n- Do not treat a competitor's own product as intent_outbound_stack unless they evidently USE third-party outbound tools.\n- Every criterion needs an evidence_quote: a direct snippet from enrichment or sourced agent finding. If no evidence, score 0 and quote \"no evidence\".\n- Never fabricate evidence.\n- final_score is holistic 1-10 anchored by subtotal reference.\n- Backend flag handling:\n  - role_account=true -> add role_account disqualifier, tier=cold, final <=2.\n  - enrichment_inconsistent=true -> cap final at 3.\n  - website_unresolved=true caps only when agent recovered no useful source.\n  - email_matched_in_top_people=false AND agent_findings.decision_maker_role null -> cap seniority_fit at 1, score 0 if no role evidence.\n  - email_matched_in_top_people=false BUT agent_findings.decision_maker_role names email local-part as Founder/CEO/VP/Head/Director with web evidence -> seniority_fit may be 2 with confidence reduced to 0.8 max.\n- Disqualifiers MUST come from the whitelist. Ad-hoc custom disqualifiers are INVALID. Non-outbound SaaS leads are scored on the 7 criteria, not disqualified.\n- Confidence high for decisive disqualification with sourced evidence; lower for positive scoring when role or intent are missing.\n- No em dashes; use commas, colons, periods, pipes."
+            }
+          ]
+        },
+        "batching": {
+          "batchSize": 5,
+          "delayBetweenBatches": 200
+        }
+      },
+      "id": "b303ecd4-0433-4b88-a248-524b8f0a23ff",
+      "name": "ICP Scoring",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        3168,
+        816
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "id": "b46c5cd8-f2b2-4a21-9cbb-aab9c4ba605f",
+      "name": "Claude Sonnet Scoring",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        3168,
+        960
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 15000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "SuAt7vntsSbFUyU4",
+          "name": "instantly_takehome_anthropic"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"required\": [\"criteria_scores\", \"subtotal\", \"final_score\", \"tier\", \"summary_reasoning\", \"confidence\"],\n  \"properties\": {\n    \"criteria_scores\": { \"type\": \"array\", \"items\": { \"type\": \"object\", \"required\": [\"name\", \"score\", \"reasoning\", \"evidence_quote\"], \"properties\": { \"name\": { \"type\": \"string\" }, \"score\": { \"type\": \"number\" }, \"reasoning\": { \"type\": \"string\" }, \"evidence_quote\": { \"type\": \"string\" } } } },\n    \"disqualifiers_triggered\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"subtotal\": { \"type\": \"number\" },\n    \"final_score\": { \"type\": \"number\" },\n    \"tier\": { \"type\": \"string\", \"enum\": [\"hot\", \"warm\", \"cold\"] },\n    \"summary_reasoning\": { \"type\": \"string\" },\n    \"confidence\": { \"type\": \"number\" }\n  }\n}"
+      },
+      "id": "35ad1948-a5d8-42c0-9b37-96598eb1b954",
+      "name": "Scoring Structured Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        3312,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "hot-score",
+                    "leftValue": "={{ Number((($json.output || {}).final_score) || $json.final_score || 0) }}",
+                    "rightValue": 8,
+                    "operator": {
+                      "type": "number",
+                      "operation": "gte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Hot 8-10"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "warm-score-min",
+                    "leftValue": "={{ Number((($json.output || {}).final_score) || $json.final_score || 0) }}",
+                    "rightValue": 4,
+                    "operator": {
+                      "type": "number",
+                      "operation": "gte"
+                    }
+                  },
+                  {
+                    "id": "warm-score-max",
+                    "leftValue": "={{ Number((($json.output || {}).final_score) || $json.final_score || 0) }}",
+                    "rightValue": 8,
+                    "operator": {
+                      "type": "number",
+                      "operation": "lt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Warm 4-7"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "cold-score",
+                    "leftValue": "={{ Number((($json.output || {}).final_score) || $json.final_score || 0) }}",
+                    "rightValue": 4,
+                    "operator": {
+                      "type": "number",
+                      "operation": "lt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Cold/Disqualify 1-3"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "107a6bc4-1f45-41f9-bb59-1212086967a3",
+      "name": "Route By Score",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        3440,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Enrichment:\n{{ $('Build Enrichment Context').first().json.combined_enrichment_text }}\n\nAgent research:\n{{ JSON.stringify($('Agent Research Gap Filler').first().json, null, 2) }}\n\nScoring:\n{{ JSON.stringify($json, null, 2) }}\n\nWrite the Hot first email. JSON only.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "<role>\nYou write the first outbound email for Instantly.ai to a Hot tier B2B lead. High-touch, evidence-backed, no template feel.\n</role>\n\n<task>\nProduce one personalized first email tied to 1-2 concrete signals from the enrichment payload or agent findings. Return JSON only.\n</task>\n\n<constraints>\n- Body: 80-130 words, 3 short paragraphs max.\n- Subject: under 60 characters, specific to the lead, no template phrases.\n- Sign: Maxime.\n- Opening: use first name only if confirmed by enrichment (matched_person). Otherwise open with \"Hi there,\".\n- Evidence: cite 1-2 specifics. Generic claims about Instantly are not acceptable.\n- No em dashes. Use commas, colons, periods, pipes.\n</constraints>\n\n<banned_phrases>\nhope this finds you well\nhope you're doing well\nI came across\nI noticed\nQuick question\nFollowing up\nJust checking in\nI'd love to connect\n</banned_phrases>\n\n<output_format>\n{\n  \"action\": \"draft\",\n  \"subject\": string,\n  \"body\": string,\n  \"skip_reason\": null,\n  \"evidence_used\": string[],\n  \"tone\": \"personalized_hot\"\n}\n</output_format>\n\n<rules>\n- Lead with the signal, not a question.\n- Tie Instantly's value (cold-email automation, sequencing, deliverability) to the lead's evidenced moment of need. If they just raised a Series B, mention scaling outbound. If they posted SDR jobs, mention enabling new SDRs faster.\n- evidence_used array lists exactly the snippets you anchored on (verbatim or close paraphrase).\n- No vague claims (\"we help companies grow\"). If you cannot tie to evidence, write less but stay specific.\n\n- BANNED character: em-dash \"—\" (Unicode U+2014). If any em-dash appears in subject or body, the response is INVALID. Use commas, colons, periods, or pipes only. Replace any en-dash, em-dash, or hyphen-minus-hyphen with these alternatives.\n- The body MUST end with a new line, then \"Maxime\" alone on the last line. If body does not end with \"Maxime\", response is INVALID.\n</rules>"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "888410f4-8365-4c6c-adc4-67504cbd7170",
+      "name": "Generate Hot Email",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        3760,
+        672
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Enrichment:\n{{ $('Build Enrichment Context').first().json.combined_enrichment_text }}\n\nAgent research:\n{{ JSON.stringify($('Agent Research Gap Filler').first().json, null, 2) }}\n\nScoring:\n{{ JSON.stringify($json, null, 2) }}\n\nWrite the Warm nurture first email. JSON only.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "<role>\nYou write a Warm nurture first email for Instantly.ai. Warm leads fit the ICP but lack strong current intent.\n</role>\n\n<task>\nProduce a lower-pressure first touch. Offer a useful perspective or resource. Do not push for a meeting on first touch. Return JSON only.\n</task>\n\n<constraints>\n- Body: 70-110 words, 2-3 short paragraphs.\n- Subject: under 60 characters.\n- Sign: Maxime.\n- No meeting ask. CTA stays soft (\"happy to share what we've seen\", \"worth comparing notes when relevant\").\n- Acknowledge uncertainty when seniority or intent is missing; do not over-claim.\n- No em dashes. Use commas, colons, periods, pipes.\n</constraints>\n\n<banned_phrases>\nhope this finds you well\nQuick question\nFollowing up\nJust checking in\nLet me know if you're interested\n</banned_phrases>\n\n<output_format>\n{\n  \"action\": \"draft\",\n  \"subject\": string,\n  \"body\": string,\n  \"skip_reason\": null,\n  \"evidence_used\": string[],\n  \"tone\": \"warm_nurture\"\n}\n</output_format>\n\n<rules>\n- Open with a perspective or insight relevant to their space, not a question.\n- Let the lead self-qualify by reply. Soft CTA only.\n- evidence_used cites the signals you anchored on.\n- If data is thin, write shorter and more honest, not vaguer.\n\n- BANNED character: em-dash \"—\" (Unicode U+2014). If any em-dash appears in subject or body, the response is INVALID. Use commas, colons, periods, or pipes only. Replace any en-dash, em-dash, or hyphen-minus-hyphen with these alternatives.\n- The body MUST end with a new line, then \"Maxime\" alone on the last line. If body does not end with \"Maxime\", response is INVALID.\n</rules>"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "8f8e8179-ef28-45a3-83e9-3480dede0c40",
+      "name": "Generate Warm Email",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        3760,
+        928
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Enrichment:\n{{ $('Build Enrichment Context').first().json.combined_enrichment_text }}\n\nScoring:\n{{ JSON.stringify($json, null, 2) }}\n\nDecide cold drip vs skip. JSON only.",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "<role>\nYou handle Cold tier leads (final_score 1-3) for Instantly.ai. Decide drip vs skip.\n</role>\n\n<task>\nChoose action=\"skip\" or action=\"drip\". If skip, set subject and body to null. If drip, write a very short low-priority nurture. Return JSON only.\n</task>\n\n<decision_rules>\nChoose action=\"skip\" when ANY of:\n- role_account=true\n- B2C / personal site / portfolio / blog with no business signal\n- website_unresolved=true AND no other strong external evidence\n- enrichment_inconsistent=true\n- final_score <= 2\n\nChoose action=\"drip\" only when:\n- final_score = 3\n- AND there is at least one plausible B2B signal worth a single low-priority nurture touch\n</decision_rules>\n\n<output_format>\nIf skip:\n{\n  \"action\": \"skip\",\n  \"subject\": null,\n  \"body\": null,\n  \"skip_reason\": string,\n  \"evidence_used\": string[],\n  \"tone\": \"skip\"\n}\n\nIf drip:\n{\n  \"action\": \"drip\",\n  \"subject\": string under 60 chars,\n  \"body\": string 40-70 words, 1 paragraph, no meeting ask, signed Maxime,\n  \"skip_reason\": null,\n  \"evidence_used\": string[],\n  \"tone\": \"cold_drip\"\n}\n</output_format>\n\n<rules>\n- Default to skip when in doubt. Outbound to bad-fit leads hurts deliverability.\n- Drip body: plants a seed, no question mark CTA, no meeting ask.\n- skip_reason is a short concrete phrase (e.g. \"role_account\", \"website_unresolved\", \"B2C portfolio\", \"final_score<=2\").\n- evidence_used lists the signals justifying the decision.\n- No em dashes, no clichés, no \"hope you're doing well\".\n\n- BANNED character: em-dash \"—\" (Unicode U+2014). If any em-dash appears in subject or body, the response is INVALID. Use commas, colons, periods, or pipes only. Replace any en-dash, em-dash, or hyphen-minus-hyphen with these alternatives.\n</rules>"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "183e2a56-9974-4d23-84ea-ce6e7326bc00",
+      "name": "Generate Cold Drip Or Skip",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        3760,
+        1232
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5-20250929",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "id": "32517e66-0b59-4aa8-b07a-39668c2bbe47",
+      "name": "Claude Sonnet Hot Email",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        3760,
+        800
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 15000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "SuAt7vntsSbFUyU4",
+          "name": "instantly_takehome_anthropic"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"action\": { \"type\": \"string\", \"enum\": [\"draft\", \"drip\", \"skip\"] },\n    \"subject\": { \"type\": [\"string\", \"null\"] },\n    \"body\": { \"type\": [\"string\", \"null\"] },\n    \"skip_reason\": { \"type\": [\"string\", \"null\"] },\n    \"evidence_used\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"tone\": { \"type\": \"string\" }\n  },\n  \"required\": [\"action\", \"subject\", \"body\", \"skip_reason\", \"evidence_used\", \"tone\"]\n}"
+      },
+      "id": "f05bb554-9e82-4596-9ef5-8a54b563ff5c",
+      "name": "Email Structured Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        3904,
+        1072
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Build Enrichment Context').first().json;\nconst agentRaw = $('Agent Research Gap Filler').first().json || {};\nconst scoreRaw = $('ICP Scoring').first().json || {};\nconst agent = agentRaw.output || agentRaw;\nconst score = scoreRaw.output || scoreRaw;\nreturn $input.all().map(item => {\n  const emailRaw = item.json || {};\n  const email = emailRaw.output || emailRaw;\n  const expectedFromSubtotal = (subtotal) => subtotal <= 2 ? 2 : subtotal <= 4 ? 3 : subtotal === 5 ? 4 : subtotal <= 7 ? 5 : subtotal <= 9 ? 6 : subtotal === 10 ? 7 : subtotal === 11 ? 8 : subtotal <= 13 ? 9 : 10;\n  const subtotal = Number(score.subtotal || 0);\n  const finalScore = Number(score.final_score || 0);\n  const expected = expectedFromSubtotal(subtotal);\n  const anomaly = Math.abs(finalScore - expected) > 2 && !(score.disqualifiers_triggered || []).includes('competitor_not_prospect');\n  const tier = score.tier || (finalScore >= 8 ? 'hot' : finalScore >= 4 ? 'warm' : 'cold');\n  const template = tier === 'hot' ? (base.data_tier === 'RICH' ? 'hot_rich' : 'hot_short') : tier === 'warm' ? 'warm' : (email.action === 'skip' ? 'cold_skip' : 'cold_drip');\n  return { json: {\n    email: base.email,\n    company_domain: base.company_domain,\n    role_account: !!base.role_account,\n    enrichment_inconsistent: !!base.enrichment_inconsistent,\n    website_unresolved: !!base.website_unresolved,\n    apollo_organization: base.apollo_organization || {},\n    apollo_top_people: base.apollo_top_people || [],\n    email_matched_in_top_people: !!base.email_matched_in_top_people,\n    matched_person: base.matched_person || null,\n    apify_content: base.apify_content || [],\n    combined_enrichment: base.combined_enrichment || {},\n    data_tier: base.data_tier || 'MINIMAL',\n    agent_iterations: agent.iterations_used || 0,\n    agent_tools_called: agent.tools_called || [],\n    agent_has_enough_info: !!agent.has_enough_info,\n    agent_findings: agent.additional_findings || {},\n    agent_research_reasoning: agent.research_reasoning || '',\n    criteria_scores: score.criteria_scores || [],\n    disqualifiers_triggered: score.disqualifiers_triggered || [],\n    subtotal,\n    expected_score: expected,\n    final_score: finalScore || null,\n    tier,\n    summary_reasoning: score.summary_reasoning || '',\n    evidence_fabricated: {},\n    evidence_fabrication: false,\n    score_anomaly: anomaly,\n    email_subject: email.subject || null,\n    email_body: email.body || null,\n    email_template_used: template,\n    action_taken: email.action === 'skip' ? 'skipped_disqualifier' : 'email_drafted',\n    review_reason: anomaly ? 'score_anomaly' : null,\n    total_cost_usd: null,\n    total_latency_ms: Date.now() - new Date(base.received_at).getTime(),\n    llm_calls_count: 2 + (agent.iterations_used || 0),\n    event_hash: base.event_hash,\n    reviewer_summary: `${String(tier).toUpperCase()} score ${finalScore || 'n/a'}: ${score.summary_reasoning || ''}`\n  }};\n});"
+      },
+      "id": "dc304fe7-17d2-4995-892f-39bfbfda0128",
+      "name": "Build Final Log Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4032,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "leads_log",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $json.email }}"
+            },
+            {
+              "fieldId": "company_domain",
+              "fieldValue": "={{ $json.company_domain }}"
+            },
+            {
+              "fieldId": "role_account",
+              "fieldValue": "={{ $json.role_account }}"
+            },
+            {
+              "fieldId": "enrichment_inconsistent",
+              "fieldValue": "={{ $json.enrichment_inconsistent }}"
+            },
+            {
+              "fieldId": "website_unresolved",
+              "fieldValue": "={{ $json.website_unresolved }}"
+            },
+            {
+              "fieldId": "apollo_organization",
+              "fieldValue": "={{ $json.apollo_organization }}"
+            },
+            {
+              "fieldId": "apollo_top_people",
+              "fieldValue": "={{ $json.apollo_top_people }}"
+            },
+            {
+              "fieldId": "email_matched_in_top_people",
+              "fieldValue": "={{ $json.email_matched_in_top_people }}"
+            },
+            {
+              "fieldId": "matched_person",
+              "fieldValue": "={{ $json.matched_person }}"
+            },
+            {
+              "fieldId": "apify_content",
+              "fieldValue": "={{ $json.apify_content }}"
+            },
+            {
+              "fieldId": "combined_enrichment",
+              "fieldValue": "={{ $json.combined_enrichment }}"
+            },
+            {
+              "fieldId": "data_tier",
+              "fieldValue": "={{ $json.data_tier }}"
+            },
+            {
+              "fieldId": "agent_iterations",
+              "fieldValue": "={{ $json.agent_iterations }}"
+            },
+            {
+              "fieldId": "agent_tools_called",
+              "fieldValue": "={{ $json.agent_tools_called }}"
+            },
+            {
+              "fieldId": "agent_has_enough_info",
+              "fieldValue": "={{ $json.agent_has_enough_info }}"
+            },
+            {
+              "fieldId": "agent_findings",
+              "fieldValue": "={{ $json.agent_findings }}"
+            },
+            {
+              "fieldId": "agent_research_reasoning",
+              "fieldValue": "={{ $json.agent_research_reasoning }}"
+            },
+            {
+              "fieldId": "criteria_scores",
+              "fieldValue": "={{ $json.criteria_scores }}"
+            },
+            {
+              "fieldId": "disqualifiers_triggered",
+              "fieldValue": "={{ $json.disqualifiers_triggered }}"
+            },
+            {
+              "fieldId": "subtotal",
+              "fieldValue": "={{ $json.subtotal }}"
+            },
+            {
+              "fieldId": "expected_score",
+              "fieldValue": "={{ $json.expected_score }}"
+            },
+            {
+              "fieldId": "final_score",
+              "fieldValue": "={{ $json.final_score }}"
+            },
+            {
+              "fieldId": "tier",
+              "fieldValue": "={{ $json.tier }}"
+            },
+            {
+              "fieldId": "summary_reasoning",
+              "fieldValue": "={{ $json.summary_reasoning }}"
+            },
+            {
+              "fieldId": "evidence_fabricated",
+              "fieldValue": "={{ $json.evidence_fabricated }}"
+            },
+            {
+              "fieldId": "evidence_fabrication",
+              "fieldValue": "={{ $json.evidence_fabrication }}"
+            },
+            {
+              "fieldId": "score_anomaly",
+              "fieldValue": "={{ $json.score_anomaly }}"
+            },
+            {
+              "fieldId": "email_subject",
+              "fieldValue": "={{ $json.email_subject }}"
+            },
+            {
+              "fieldId": "email_body",
+              "fieldValue": "={{ $json.email_body }}"
+            },
+            {
+              "fieldId": "email_template_used",
+              "fieldValue": "={{ $json.email_template_used }}"
+            },
+            {
+              "fieldId": "action_taken",
+              "fieldValue": "={{ $json.action_taken }}"
+            },
+            {
+              "fieldId": "review_reason",
+              "fieldValue": "={{ $json.review_reason }}"
+            },
+            {
+              "fieldId": "total_cost_usd",
+              "fieldValue": "={{ $json.total_cost_usd }}"
+            },
+            {
+              "fieldId": "total_latency_ms",
+              "fieldValue": "={{ $json.total_latency_ms }}"
+            },
+            {
+              "fieldId": "llm_calls_count",
+              "fieldValue": "={{ $json.llm_calls_count }}"
+            },
+            {
+              "fieldId": "event_hash",
+              "fieldValue": "={{ $json.event_hash }}"
+            }
+          ]
+        }
+      },
+      "id": "f7797a93-1a33-4ebf-9112-002330ac7c48",
+      "name": "Create Supabase Lead Log",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4144,
+        384
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "WrCUYCyuHKHjQrpM",
+          "name": "instantly_takehome_supabase"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: ($json.valid_email && $json.valid_domain) ? 'accepted' : 'rejected', event_hash: $json.event_hash, email: $json.email, company_domain: $json.company_domain, role_account: $json.role_account, reason: (!$json.valid_email ? 'invalid_email' : (!$json.valid_domain ? 'invalid_domain' : null)), message: ($json.valid_email && $json.valid_domain) ? 'Lead queued for enrichment + scoring. Poll Supabase leads_log by event_hash for the full decision.' : 'Lead rejected at validation. See reason field.' }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "5b6a1082-2bc0-4822-912f-92b082237a99",
+      "name": "Respond Summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1632,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Task A | Instantly take-home\n\nRequired by the prompt -> implemented here:\n\nLead webhook `{email, company_domain}`\n-> Normalize + early invalid/role-account guard\n\nEnrich lead\n-> Apollo company + top people, Apify website crawl\n\nAgentic twist\n-> Agent checks sparse data, searches with Apify Google Search, reads source URLs with Jina Reader when useful\n\nICP score + reasoning\n-> 7-criterion rubric, structured parser, deterministic score routing\n\nOutreach sequence\n-> Hot / Warm / Cold first-email generation\n\nLog decision chain\n-> Supabase full audit log + Google Sheet reviewer mirror",
+        "height": 372,
+        "width": 648,
+        "color": 4
+      },
+      "id": "4cb4ea1a-4c84-4530-87d3-eb2698a42b9e",
+      "name": "Architecture Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Agentic gap research\n\nThe agent runs after Apollo + Apify and before scoring.\n\nIt searches only when data is sparse:\n- missing description, size, industry, title/person match\n- thin or unresolved website\n- no intent / stack / hiring / funding signal\n\nTools:\n- Apify Google Search = find URLs/snippets with query operators\n- Jina Reader = read one concrete URL as markdown",
+        "height": 524,
+        "width": 676,
+        "color": 3
+      },
+      "id": "235bdc91-a499-4088-aa18-4f37cb09cab7",
+      "name": "Agentic Twist Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2304,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Logging and reviewer visibility\n\nSupabase = full audit log:\nraw Apollo data, top people, website crawl, combined enrichment, agent tools/findings, ICP score/reasoning, selected sequence, generated email, flags.\n\nGoogle Sheets = compact reviewer mirror.\n\nInvalid/role-account leads still get logged through `Build Skip Log`; they skip paid enrichment and LLM calls.",
+        "height": 268,
+        "width": 3160,
+        "color": 7
+      },
+      "id": "60aa3cda-6aef-40a2-a1c9-a419a5fd6b27",
+      "name": "Logging Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Ingest + enrichment\n\nWebhook receives email/domain, normalizes input, and skips invalid or role-account addresses before paid calls.\n\nValid leads continue to Apollo + Apify. Skip leads still go to the same Supabase/Sheets log path for reviewer visibility.",
+        "height": 528,
+        "width": 976,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        560
+      ],
+      "id": "18b56020-b024-4902-bb17-59347f4dde2d",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5-20250929",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "id": "61943f28-d57c-4d35-9c87-6dc583c4f7dd",
+      "name": "Claude Sonnet Agent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2416,
+        976
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 15000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "SuAt7vntsSbFUyU4",
+          "name": "instantly_takehome_anthropic"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-haiku-4-5-20251001",
+          "mode": "list",
+          "cachedResultName": "Claude Haiku 4.5"
+        },
+        "options": {}
+      },
+      "id": "44b5f788-7666-413d-aa61-c0a177555888",
+      "name": "Claude Haiku Warm Cold Email",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        3760,
+        1088
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 15000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "SuAt7vntsSbFUyU4",
+          "name": "instantly_takehome_anthropic"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $fromAI('url', 'Full URL to fetch as clean markdown (include https://)', 'string') }}",
+        "options": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-base.jinaAiTool",
+      "typeVersion": 1,
+      "position": [
+        2768,
+        976
+      ],
+      "id": "f5bb61eb-aa37-4692-840d-3520167f13d6",
+      "name": "Read URL content in Jina AI",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "jinaAiApi": {
+          "id": "Hq5lAixCwuXyeewH",
+          "name": "instantly_takehome_jina"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "Run actor and get dataset",
+        "actorId": {
+          "__rl": true,
+          "value": "nFJndFXA5zjCTuudP",
+          "mode": "list",
+          "cachedResultName": "Google Search Results Scraper (apify/google-search-scraper)"
+        },
+        "customBody": "={{ { \"queries\": $fromAI(\"search_query\", \"Exact Google query string. Include operators when useful, for example site:linkedin.com/company Acme, Acme funding, Acme SDR jobs, Acme Apollo Outreach Salesloft.\"), \"resultsPerPage\": 3, \"maxPagesPerQuery\": 1, \"forceExactMatch\": false } }}"
+      },
+      "id": "e3036d5c-b13d-4ed0-8e6f-4875802ffd7f",
+      "name": "Search Web with Apify Google",
+      "type": "@apify/n8n-nodes-apify.apifyTool",
+      "typeVersion": 1,
+      "position": [
+        2592,
+        976
+      ],
+      "credentials": {
+        "apifyApi": {
+          "id": "utLa7Ic0Nuka9x6Z",
+          "name": "instantly_takehome_apify"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## ICP scoring\n\n  7 axes, each scored 0/1/2 with one evidence quote.\n  Final 1-10 is a holistic judgment anchored to the subtotal, not a weighted sum.\n\n  Disqualifiers come from a fixed list (competitor, agency, role account, enterprise, B2C, invalid, dead domain). The model cannot invent new ones.\n\n  Non-outbound SaaS (dev tools, support, project management) gets scored normally, not disqualified.",
+        "height": 524,
+        "width": 628,
+        "color": 6
+      },
+      "id": "679bb1c6-4da6-4bad-9235-a1e81d451f2f",
+      "name": "ICP Scoring Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2992,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "content": " ## Email per tier\n\nHot (Sonnet): 80-130 words, evidence-backed, ties Instantly to a specific signal (funding, hiring).\nWarm (Haiku): 70-110 words, no meeting ask, soft CTA.\nCold (Haiku): default to skip to protect deliverability. Drip only on score 3 with a real B2B signal.\n",
+        "height": 812,
+        "width": 836,
+        "color": 2
+      },
+      "id": "5ad074c5-676e-4ce4-8d2e-d0523af7468f",
+      "name": "Email Generation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3632,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Lead Ingest": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          {
+            "node": "Respond Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invalid Email Or Domain?": {
+      "main": [
+        [
+          {
+            "node": "Build Skip Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apollo Organization Enrich",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Apify Website Crawl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Skip Log": {
+      "main": [
+        [
+          {
+            "node": "Create Supabase Lead Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo Organization Enrich": {
+      "main": [
+        [
+          {
+            "node": "Apollo People Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo People Search": {
+      "main": [
+        [
+          {
+            "node": "Merge Apollo And Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify Website Crawl": {
+      "main": [
+        [
+          {
+            "node": "Summarize Website Crawl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Website Crawl": {
+      "main": [
+        [
+          {
+            "node": "Merge Apollo And Website",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Apollo And Website": {
+      "main": [
+        [
+          {
+            "node": "Build Enrichment Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Enrichment Context": {
+      "main": [
+        [
+          {
+            "node": "Agent Research Gap Filler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent Research Gap Filler": {
+      "main": [
+        [
+          {
+            "node": "Agent Has Enough Info?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent Structured Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent Research Gap Filler",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent Has Enough Info?": {
+      "main": [
+        [
+          {
+            "node": "ICP Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Review Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review Log": {
+      "main": [
+        [
+          {
+            "node": "Create Supabase Lead Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ICP Scoring": {
+      "main": [
+        [
+          {
+            "node": "Route By Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet Scoring": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "ICP Scoring",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scoring Structured Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "ICP Scoring",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route By Score": {
+      "main": [
+        [
+          {
+            "node": "Generate Hot Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Warm Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Cold Drip Or Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Hot Email": {
+      "main": [
+        [
+          {
+            "node": "Build Final Log Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Warm Email": {
+      "main": [
+        [
+          {
+            "node": "Build Final Log Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cold Drip Or Skip": {
+      "main": [
+        [
+          {
+            "node": "Build Final Log Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet Hot Email": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Hot Email",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Structured Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate Hot Email",
+            "type": "ai_outputParser",
+            "index": 0
+          },
+          {
+            "node": "Generate Warm Email",
+            "type": "ai_outputParser",
+            "index": 0
+          },
+          {
+            "node": "Generate Cold Drip Or Skip",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Log Row": {
+      "main": [
+        [
+          {
+            "node": "Create Supabase Lead Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Supabase Lead Log": {
+      "main": [
+        []
+      ]
+    },
+    "Respond Summary": {
+      "main": [
+        [
+          {
+            "node": "Invalid Email Or Domain?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet Agent": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent Research Gap Filler",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Haiku Warm Cold Email": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Warm Email",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Generate Cold Drip Or Skip",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read URL content in Jina AI": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent Research Gap Filler",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Web with Apify Google": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent Research Gap Filler",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d673b83f6f32f8693396bc06687e1524428fafeb4091c42a8dc48e6f3e8892a5"
+  }
+}
